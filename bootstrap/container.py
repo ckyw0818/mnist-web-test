@@ -1,16 +1,11 @@
 import torch
 
 from config import MODEL_PATH, THRESHOLD, PADDING
-from domain.add_operation import AddOperation
-from domain.subtract_operation import SubtractOperation
-from domain.multiply_operation import MultiplyOperation
-from domain.divide_operation import DivideOperation
-from domain.calculator import Calculator
 from infrastructure.torch_digit_classifier import TorchDigitClassifier
 from infrastructure.gradio_canvas_preprocessor import GradioCanvasPreprocessor
-from services.handwriting_math_service import HandwritingMathService
-from ui.clear_controller import ClearController
+from services.height_prediction_service import HeightPredictionService
 from ui.app_builder import AppBuilder
+
 
 class Container:
     def build_app(self):
@@ -20,28 +15,13 @@ class Container:
         preprocessor = GradioCanvasPreprocessor(
             device=device,
             threshold=THRESHOLD,
-            padding=PADDING
+            padding=PADDING,
         )
 
-        calculator = Calculator([
-            AddOperation(),
-            SubtractOperation(),
-            MultiplyOperation(),
-            DivideOperation(),
-        ])
-
-        service = HandwritingMathService(
+        service = HeightPredictionService(
             classifier=classifier,
             preprocessor=preprocessor,
-            calculator=calculator
         )
 
-        clear_controller = ClearController()
-
-        builder = AppBuilder(
-            service=service,
-            calculator=calculator,
-            clear_controller=clear_controller
-        )
-
+        builder = AppBuilder(service=service)
         return builder.build()

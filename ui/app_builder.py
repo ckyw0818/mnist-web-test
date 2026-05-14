@@ -1,9 +1,7 @@
 import gradio as gr
-import datetime
-from domain.calculator import Calculator
-from services.handwriting_math_service import HandwritingMathService
-from ui.clear_controller import ClearController
-from config import CANVAS_SIZE
+from services.height_prediction_service import HeightPredictionService
+
+DIGIT_SIZE = 160  # 각 자리 캔버스 크기
 
 CUSTOM_CSS = """
 .gradio-container {
@@ -19,25 +17,15 @@ CUSTOM_CSS = """
     border: 1px solid #e5e7eb;
     box-shadow: 0 1px 4px rgba(0,0,0,0.06);
 }
-footer { visibility: hidden; }
-"""
-
-_PRED_IDLE_HTML = """
-<div style="
-    background: #f9fafb;
-    border: 1.5px dashed #d1d5db;
-    border-radius: 12px;
-    padding: 18px;
+.digit-label {
     text-align: center;
+    font-size: 0.78em;
     color: #9ca3af;
-    font-style: italic;
-    margin-top: 8px;
-    min-height: 80px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.9em;
-">✏️ 숫자를 그린 뒤 계산하세요</div>
+    margin-top: 4px;
+    font-family: monospace;
+    letter-spacing: 1px;
+}
+footer { visibility: hidden; }
 """
 
 _RESULT_IDLE_HTML = """
@@ -45,182 +33,110 @@ _RESULT_IDLE_HTML = """
     background: #f9fafb;
     border: 1.5px dashed #d1d5db;
     border-radius: 16px;
-    padding: 40px 20px;
+    padding: 36px 20px;
     text-align: center;
     color: #9ca3af;
     font-size: 0.9em;
     font-style: italic;
 ">
-    <div style="font-size: 2em; margin-bottom: 10px;">🧮</div>
-    두 숫자를 그리고 계산 버튼을 눌러주세요
+    <div style="font-size: 2em; margin-bottom: 10px;">📏</div>
+    엄마·아빠 키를 모두 그린 뒤<br>예측 버튼을 눌러주세요
 </div>
 """
 
 
-def _confidence_color(pct: float) -> str:
+def _conf_color(pct: float) -> str:
     if pct >= 90:
         return "#16a34a"
     elif pct >= 70:
         return "#ca8a04"
-    else:
-        return "#dc2626"
+    return "#dc2626"
 
 
-def _pred_html(msg: str) -> str:
-    if not msg or "Handwriting" in msg:
-        return _PRED_IDLE_HTML
-
-    try:
-        left, right = msg.split("(probability:")
-        digit = int(left.replace("Prediction:", "").strip())
-        confidence = float(right.replace(")", "").strip()) * 100
-        color = _confidence_color(confidence)
-        bar_w = min(confidence, 100)
-        bg_color = {"#16a34a": "#f0fdf4", "#ca8a04": "#fefce8", "#dc2626": "#fef2f2"}.get(color, "#f9fafb")
-        border_color = {"#16a34a": "#bbf7d0", "#ca8a04": "#fde68a", "#dc2626": "#fecaca"}.get(color, "#e5e7eb")
-
-        return f"""
-        <div style="
-            background: {bg_color};
-            border: 1.5px solid {border_color};
-            border-radius: 12px;
-            padding: 18px 20px;
-            margin-top: 8px;
-        ">
-            <div style="
-                font-size: 2.8em;
-                font-weight: 900;
-                color: {color};
-                text-align: center;
-                line-height: 1;
-                margin-bottom: 8px;
-            ">{digit}</div>
-            <div style="
-                color: #6b7280;
-                font-size: 0.82em;
-                text-align: center;
-                margin-bottom: 8px;
-                font-family: monospace;
-            ">신뢰도 {confidence:.1f}%</div>
-            <div style="
-                background: #e5e7eb;
-                border-radius: 4px;
-                height: 6px;
-                overflow: hidden;
-            ">
-                <div style="
-                    width: {bar_w}%;
-                    height: 100%;
-                    background: {color};
-                    border-radius: 4px;
-                "></div>
-            </div>
-        </div>
-        """
-    except Exception:
-        return f"""
-        <div style="
-            background: #f9fafb;
-            border: 1px solid #e5e7eb;
-            border-radius: 12px;
-            padding: 16px;
-            color: #374151;
-            text-align: center;
-            margin-top: 8px;
-        ">{msg}</div>
-        """
-
-
-def _result_html(expr: str, result_msg: str) -> str:
-    has_error = (
-        not expr
-        or "not enough" in expr.lower()
-        or "error" in expr.lower()
-        or "Write" in expr
+def _digit_chip_html(digit, confidence) -> str:
+    if digit is None:
+        return '<span style="color:#d1d5db;font-size:1.6em;">?</span>'
+    pct = confidence * 100
+    color = _conf_color(pct)
+    return (
+        f'<span style="font-size:1.8em;font-weight:900;color:{color};">{digit}</span>'
+        f'<span style="font-size:0.7em;color:#9ca3af;margin-left:2px;">{pct:.0f}%</span>'
     )
-    if has_error:
-        err_text = result_msg if result_msg else "양쪽에 숫자를 그려주세요"
-        return f"""
-        <div style="
-            background: #fef2f2;
-            border: 1.5px solid #fecaca;
-            border-radius: 16px;
-            padding: 36px 20px;
-            text-align: center;
-        ">
-            <div style="font-size: 2em; margin-bottom: 10px;">⚠️</div>
-            <div style="color: #b91c1c; font-size: 0.95em;">{err_text}</div>
-        </div>
-        """
 
-    raw_val = result_msg.replace("result:", "").strip()
-    try:
-        fval = float(raw_val)
-        display = str(int(fval)) if fval == int(fval) else f"{fval:.4f}".rstrip("0").rstrip(".")
-    except Exception:
-        display = raw_val
 
+def _height_row_html(label: str, digits, height) -> str:
+    chips = "  ".join(_digit_chip_html(d, c) for d, c in digits)
+    height_str = f"<b>{height} cm</b>" if height is not None else "?"
     return f"""
     <div style="
-        background: #ffffff;
-        border: 1.5px solid #c7d2fe;
-        border-radius: 16px;
-        padding: 36px 20px;
-        text-align: center;
-        box-shadow: 0 2px 12px rgba(99,102,241,0.1);
+        background:#ffffff;
+        border:1px solid #e5e7eb;
+        border-radius:12px;
+        padding:14px 20px;
+        display:flex;
+        align-items:center;
+        gap:16px;
+        margin-bottom:8px;
     ">
+        <span style="color:#6b7280;font-weight:600;min-width:60px;">{label}</span>
+        <span style="font-family:monospace;font-size:1.1em;">{chips}</span>
+        <span style="margin-left:auto;color:#111827;font-size:1.1em;">{height_str}</span>
+    </div>
+    """
+
+
+def _result_html(mom_digits, dad_digits, mom_h, dad_h, predicted, gender, error) -> str:
+    if error:
+        return f"""
         <div style="
-            color: #6b7280;
-            font-size: 1em;
-            letter-spacing: 4px;
-            margin-bottom: 12px;
-            font-family: monospace;
-        ">{expr}</div>
-        <div style="
-            font-size: 3.8em;
-            font-weight: 900;
-            color: #4f46e5;
-            line-height: 1;
-        ">= {display}</div>
+            background:#fef2f2;border:1.5px solid #fecaca;
+            border-radius:16px;padding:32px 20px;text-align:center;
+        ">
+            <div style="font-size:1.8em;margin-bottom:8px;">⚠️</div>
+            <div style="color:#b91c1c;">{error}</div>
+        </div>
+        """
+
+    formula = "(아빠키 + 엄마키 + 13) ÷ 2" if gender == "남자아이" \
+              else "(아빠키 + 엄마키 − 13) ÷ 2"
+    icon = "👦" if gender == "남자아이" else "👧"
+
+    rows = _height_row_html("엄마 키", mom_digits, mom_h) + \
+           _height_row_html("아빠 키", dad_digits, dad_h)
+
+    pred_int = int(predicted)
+    pred_dec = int((predicted - pred_int) * 10)
+
+    return f"""
+    <div style="background:#ffffff;border:1.5px solid #c7d2fe;border-radius:16px;
+                padding:24px 20px;box-shadow:0 2px 12px rgba(99,102,241,0.08);">
+        {rows}
+        <div style="border-top:1px solid #e5e7eb;margin:16px 0;"></div>
+        <div style="text-align:center;">
+            <div style="color:#6b7280;font-size:0.85em;margin-bottom:6px;">
+                {icon} {gender} 예측 공식 &nbsp;·&nbsp; <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;">{formula}</code>
+            </div>
+            <div style="font-size:3.4em;font-weight:900;color:#4f46e5;line-height:1.1;">
+                {pred_int}<span style="font-size:0.45em;color:#6b7280;">.{pred_dec} cm</span>
+            </div>
+        </div>
     </div>
     """
 
 
 class AppBuilder:
-    def __init__(
-        self,
-        service: HandwritingMathService,
-        calculator: Calculator,
-        clear_controller: ClearController,
-    ):
+    def __init__(self, service: HeightPredictionService):
         self._service = service
-        self._calculator = calculator
-        self._history: list[list[str]] = []
 
-    def _calculate(self, raw1, raw2, operator):
-        p1, p2, expr, res, prev1, prev2 = self._service.calculate(raw1, raw2, operator)
+    def _predict(self, m1, m2, m3, d1, d2, d3, gender):
+        mom_digits, dad_digits, mom_h, dad_h, predicted, error, \
+            mom_prev, dad_prev = self._service.predict(m1, m2, m3, d1, d2, d3, gender)
 
-        h1 = _pred_html(p1)
-        h2 = _pred_html(p2)
-        rh = _result_html(expr, res)
-
-        if expr and "not enough" not in expr.lower() and "error" not in expr.lower() and "Write" not in expr:
-            ts = datetime.datetime.now().strftime("%H:%M:%S")
-            raw_val = res.replace("result:", "").strip()
-            try:
-                fval = float(raw_val)
-                disp = str(int(fval)) if fval == int(fval) else f"{fval:.4f}".rstrip("0").rstrip(".")
-            except Exception:
-                disp = raw_val
-            self._history.insert(0, [ts, expr, disp])
-            if len(self._history) > 12:
-                self._history = self._history[:12]
-
-        hist = self._history if self._history else [["", "", ""]]
-        return h1, h2, rh, prev1, prev2, hist
+        rh = _result_html(mom_digits, dad_digits, mom_h, dad_h, predicted, gender, error)
+        return (rh,) + tuple(mom_prev) + tuple(dad_prev)
 
     def _clear(self):
-        return None, None, _PRED_IDLE_HTML, _PRED_IDLE_HTML, _RESULT_IDLE_HTML, None, None
+        return (None,) * 6 + (_RESULT_IDLE_HTML,) + (None,) * 6
 
     def launch(self, **kwargs):
         self._demo.launch(theme=self._theme, css=CUSTOM_CSS, **kwargs)
@@ -228,7 +144,6 @@ class AppBuilder:
     def build(self):
         self._theme = gr.themes.Base(
             primary_hue="indigo",
-            secondary_hue="purple",
             neutral_hue="gray",
         ).set(
             body_background_fill="#f5f7fa",
@@ -247,99 +162,92 @@ class AppBuilder:
             button_secondary_border_color="#d1d5db",
         )
 
-        with gr.Blocks(title="AI 손글씨 계산기") as demo:
+        with gr.Blocks(title="AI 예측 키 계산기") as demo:
 
             # ── 헤더 ────────────────────────────────────────────────────
             gr.HTML("""
             <div class="header-card">
-                <div style="font-size:2.2em; font-weight:900; color:#111827; margin-bottom:6px;">
-                    AI 손글씨 계산기
+                <div style="font-size:2.2em;font-weight:900;color:#111827;margin-bottom:6px;">
+                    AI 예측 키 계산기
                 </div>
-                <div style="color:#6b7280; font-size:0.95em;">
-                    CNN이 손글씨 숫자를 인식하고 실시간으로 계산합니다 &nbsp;·&nbsp; MNIST
+                <div style="color:#6b7280;font-size:0.95em;">
+                    엄마·아빠 키를 손글씨로 입력하면 자녀의 예측 키를 계산해드립니다
                 </div>
             </div>
             """)
 
-            # ── 3단 레이아웃 ─────────────────────────────────────────────
-            with gr.Row(equal_height=False):
+            # ── 입력 영역 ─────────────────────────────────────────────
+            with gr.Row():
 
-                # 왼쪽
-                with gr.Column(scale=5):
-                    gr.HTML('<p style="color:#374151;font-weight:600;margin:0 0 6px;">✏️ 첫 번째 숫자</p>')
-                    editor1 = gr.Sketchpad(
-                        type="numpy",
-                        label="첫 번째 숫자",
-                        show_label=False,
-                        height=CANVAS_SIZE,
-                        width=CANVAS_SIZE,
-                    )
-                    pred_html1 = gr.HTML(_PRED_IDLE_HTML)
-
-                # 중앙
-                with gr.Column(scale=4, min_width=220):
-                    gr.HTML('<p style="color:#374151;font-weight:600;margin:0 0 6px;text-align:center;">⚡ 연산자 선택</p>')
-                    operator = gr.Radio(
-                        choices=self._calculator.supported_symbols(),
-                        value="+",
-                        label="연산자",
-                        show_label=False,
-                    )
-                    gr.HTML('<p style="color:#374151;font-weight:600;margin:16px 0 6px;text-align:center;">📊 계산 결과</p>')
-                    result_html_comp = gr.HTML(_RESULT_IDLE_HTML)
-
+                # 엄마 키
+                with gr.Column():
+                    gr.HTML('<p style="color:#374151;font-weight:700;font-size:1em;margin:0 0 8px;">👩 엄마 키 (cm)</p>')
                     with gr.Row():
-                        calc_btn = gr.Button("🚀  계산하기", variant="primary", scale=3)
-                        clear_btn = gr.Button("🗑️", scale=1)
+                        with gr.Column(min_width=DIGIT_SIZE):
+                            m1 = gr.Sketchpad(type="numpy", show_label=False,
+                                              height=DIGIT_SIZE, width=DIGIT_SIZE)
+                            gr.HTML('<div class="digit-label">백의 자리</div>')
+                        with gr.Column(min_width=DIGIT_SIZE):
+                            m2 = gr.Sketchpad(type="numpy", show_label=False,
+                                              height=DIGIT_SIZE, width=DIGIT_SIZE)
+                            gr.HTML('<div class="digit-label">십의 자리</div>')
+                        with gr.Column(min_width=DIGIT_SIZE):
+                            m3 = gr.Sketchpad(type="numpy", show_label=False,
+                                              height=DIGIT_SIZE, width=DIGIT_SIZE)
+                            gr.HTML('<div class="digit-label">일의 자리</div>')
 
-                # 오른쪽
-                with gr.Column(scale=5):
-                    gr.HTML('<p style="color:#374151;font-weight:600;margin:0 0 6px;">✏️ 두 번째 숫자</p>')
-                    editor2 = gr.Sketchpad(
-                        type="numpy",
-                        label="두 번째 숫자",
-                        show_label=False,
-                        height=CANVAS_SIZE,
-                        width=CANVAS_SIZE,
-                    )
-                    pred_html2 = gr.HTML(_PRED_IDLE_HTML)
+                # 아빠 키
+                with gr.Column():
+                    gr.HTML('<p style="color:#374151;font-weight:700;font-size:1em;margin:0 0 8px;">👨 아빠 키 (cm)</p>')
+                    with gr.Row():
+                        with gr.Column(min_width=DIGIT_SIZE):
+                            d1 = gr.Sketchpad(type="numpy", show_label=False,
+                                              height=DIGIT_SIZE, width=DIGIT_SIZE)
+                            gr.HTML('<div class="digit-label">백의 자리</div>')
+                        with gr.Column(min_width=DIGIT_SIZE):
+                            d2 = gr.Sketchpad(type="numpy", show_label=False,
+                                              height=DIGIT_SIZE, width=DIGIT_SIZE)
+                            gr.HTML('<div class="digit-label">십의 자리</div>')
+                        with gr.Column(min_width=DIGIT_SIZE):
+                            d3 = gr.Sketchpad(type="numpy", show_label=False,
+                                              height=DIGIT_SIZE, width=DIGIT_SIZE)
+                            gr.HTML('<div class="digit-label">일의 자리</div>')
 
-            # ── 전처리 미리보기 ──────────────────────────────────────────
+            # ── 성별 + 버튼 ──────────────────────────────────────────
+            with gr.Row():
+                gender = gr.Radio(
+                    choices=["남자아이", "여자아이"],
+                    value="남자아이",
+                    label="자녀 성별",
+                )
+                with gr.Column(min_width=200):
+                    predict_btn = gr.Button("📏  키 예측하기", variant="primary")
+                    clear_btn   = gr.Button("🗑️  초기화")
+
+            # ── 결과 ─────────────────────────────────────────────────
+            result_comp = gr.HTML(_RESULT_IDLE_HTML)
+
+            # ── 전처리 미리보기 (접기) ────────────────────────────────
             with gr.Accordion("🔬 AI가 실제로 보는 이미지 (28×28 전처리)", open=False):
                 with gr.Row():
-                    preview1 = gr.Image(
-                        label="첫 번째 전처리 이미지",
-                        type="pil",
-                        height=140,
-                    )
-                    preview2 = gr.Image(
-                        label="두 번째 전처리 이미지",
-                        type="pil",
-                        height=140,
-                    )
+                    mp1 = gr.Image(label="엄마 백", type="pil", height=100)
+                    mp2 = gr.Image(label="엄마 십", type="pil", height=100)
+                    mp3 = gr.Image(label="엄마 일", type="pil", height=100)
+                    dp1 = gr.Image(label="아빠 백", type="pil", height=100)
+                    dp2 = gr.Image(label="아빠 십", type="pil", height=100)
+                    dp3 = gr.Image(label="아빠 일", type="pil", height=100)
 
-            # ── 계산 기록 ────────────────────────────────────────────────
-            with gr.Accordion("📜 계산 기록 (최근 12개)", open=True):
-                history_table = gr.Dataframe(
-                    headers=["시간", "수식", "결과"],
-                    datatype=["str", "str", "str"],
-                    value=[["", "", ""]],
-                    interactive=False,
-                    wrap=True,
-                    col_count=(3, "fixed"),
-                )
-
-            # ── 이벤트 연결 ──────────────────────────────────────────────
-            calc_btn.click(
-                fn=self._calculate,
-                inputs=[editor1, editor2, operator],
-                outputs=[pred_html1, pred_html2, result_html_comp, preview1, preview2, history_table],
+            # ── 이벤트 ───────────────────────────────────────────────
+            predict_btn.click(
+                fn=self._predict,
+                inputs=[m1, m2, m3, d1, d2, d3, gender],
+                outputs=[result_comp, mp1, mp2, mp3, dp1, dp2, dp3],
             )
 
             clear_btn.click(
                 fn=self._clear,
                 inputs=[],
-                outputs=[editor1, editor2, pred_html1, pred_html2, result_html_comp, preview1, preview2],
+                outputs=[m1, m2, m3, d1, d2, d3, result_comp, mp1, mp2, mp3, dp1, dp2, dp3],
             )
 
         self._demo = demo
