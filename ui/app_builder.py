@@ -254,29 +254,30 @@ class AppBuilder:
     def _clear(self):
         return None, None, _PRED_IDLE_HTML, _PRED_IDLE_HTML, _RESULT_IDLE_HTML, None, None
 
+    def launch(self, **kwargs):
+        self._demo.launch(theme=self._theme, css=CUSTOM_CSS, **kwargs)
+
     def build(self):
-        with gr.Blocks(
-            title="AI 손글씨 계산기",
-            css=CUSTOM_CSS,
-            theme=gr.themes.Base(
-                primary_hue="indigo",
-                secondary_hue="purple",
-                neutral_hue="slate",
-            ).set(
-                body_background_fill="transparent",
-                block_background_fill="rgba(255,255,255,0.04)",
-                block_border_color="rgba(255,255,255,0.1)",
-                block_label_text_color="rgba(255,255,255,0.7)",
-                block_title_text_color="rgba(255,255,255,0.9)",
-                input_background_fill="rgba(255,255,255,0.06)",
-                panel_background_fill="rgba(255,255,255,0.02)",
-                button_primary_background_fill="linear-gradient(135deg, #6366f1, #8b5cf6)",
-                button_primary_background_fill_hover="linear-gradient(135deg, #818cf8, #a78bfa)",
-                button_primary_text_color="white",
-                button_secondary_background_fill="rgba(255,255,255,0.07)",
-                button_secondary_text_color="rgba(255,255,255,0.85)",
-            ),
-        ) as demo:
+        self._theme = gr.themes.Base(
+            primary_hue="indigo",
+            secondary_hue="purple",
+            neutral_hue="slate",
+        ).set(
+            body_background_fill="transparent",
+            block_background_fill="rgba(255,255,255,0.04)",
+            block_border_color="rgba(255,255,255,0.1)",
+            block_label_text_color="rgba(255,255,255,0.7)",
+            block_title_text_color="rgba(255,255,255,0.9)",
+            input_background_fill="rgba(255,255,255,0.06)",
+            panel_background_fill="rgba(255,255,255,0.02)",
+            button_primary_background_fill="linear-gradient(135deg, #6366f1, #8b5cf6)",
+            button_primary_background_fill_hover="linear-gradient(135deg, #818cf8, #a78bfa)",
+            button_primary_text_color="white",
+            button_secondary_background_fill="rgba(255,255,255,0.07)",
+            button_secondary_text_color="rgba(255,255,255,0.85)",
+        )
+
+        with gr.Blocks(title="AI 손글씨 계산기") as demo:
 
             # ── 헤더 ────────────────────────────────────────────────────
             gr.HTML("""
@@ -342,13 +343,11 @@ class AppBuilder:
                         label="첫 번째 전처리 이미지",
                         type="pil",
                         height=140,
-                        show_download_button=False,
                     )
                     preview2 = gr.Image(
                         label="두 번째 전처리 이미지",
                         type="pil",
                         height=140,
-                        show_download_button=False,
                     )
 
             # ── 계산 기록 ────────────────────────────────────────────────
@@ -376,4 +375,5 @@ class AppBuilder:
                 outputs=[editor1, editor2, pred_html1, pred_html2, result_html_comp, preview1, preview2],
             )
 
-        return demo
+        self._demo = demo
+        return self
